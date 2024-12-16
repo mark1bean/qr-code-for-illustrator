@@ -1,10 +1,17 @@
 /**
- * QRCode generator for Adobe Illustrator.
- * @author m1b (just the Adobe Illustrator-specific code)
- * @see https://github.com/davidshimjs/qrcodejs/tree/master
- * @see https://kazuhikoarase.github.io/qrcode-generator/js/demo/
+ * @file QRCode.js
+ *
+ * QRCode generator
+ * for Adobe Illustrator
+ * and Adobe Indesign.
+ *
+ * @author see https://github.com/davidshimjs/qrcodejs/tree/master
+ * @author see https://kazuhikoarase.github.io/qrcode-generator/js/demo/
+ * @author m1b - just the implementation for Illustrator and Indesign
  */
 var QRCode;
+
+$.global.APP_IS_INDESIGN = /indesign/i.test(app.name);
 
 (function () {
     //---------------------------------------------------------------------
@@ -744,19 +751,21 @@ var QRCode;
     }
 
     /**
-     * Returns an Illustrator GroupItem
-     * representing a QR Code.
+     * Returns an Illustrator GroupItem or an
+     * Indesign Group representing a QR Code.
+     *
      * @class QRCode
      * @constructor
      *
      * @example
      * var qr = new QRCode(
      *    text : "https://en.wikipedia.org/wiki/QR_code",
-     *    doc: doc,
+     *    container: doc,
+     *    correctLevel: QRErrorCorrectLevel.H,
      *    left: 0,
      *    top: 0,
      *    width: 100,
-     *    correctLevel: QRErrorCorrectLevel.H,
+     *    margin: 4,
      * });
      *
      * @param {Object} options
@@ -769,75 +778,88 @@ var QRCode;
      * @param {RGBColor|CMYKColor} [options.colorDark=Black] - color of the QRCode.
      * @param {RGBColor|CMYKColor} [options.colorLight=White] - background color of the QRCode.
      * @param {Boolean} [options.joinSquares=false] - whether to "unite" the QRCode squares.
-     * @param {QRCode.CorrectLevel} [options.correctLevel=QRCode.CorrectLevel.H] - the level of error correction: L = 7%, M=15%, Q=25%, H=30%.
+     * @param {QRCode.CorrectLevel} [options.correctLevel=QRCode.CorrectLevel.M] - the level of error correction: L = 7%, M=15%, Q=25%, H=30%.
+     * @param {Number} [options.typeNumber] - the QRCode type (normally calculated, so optional, and usually between 1 and 5).
      * @returns {GroupItem}
      */
     QRCode = function (options) {
+
+        if (!options)
+            throw new Error('QRCode: no `options` supplied.');
+
+        // defaults
         this.options = {
-            left: 0,
-            top: 0,
+            doc: app.activeDocument,
+            container: app.activeDocument,
+            position: [0, 0],
             width: 100,
-            typeNumber: 4,
-            colorDark: makeColor([0, 0, 0]),
-            colorLight: makeColor([255, 255, 255]),
-            correctLevel: QRErrorCorrectLevel.H,
+            colorDark: makeColor([0, 0, 0], options.doc || app.activeDocument),
+            colorLight: makeColor([255, 255, 255], options.doc || app.activeDocument),
+            correctLevel: QRErrorCorrectLevel.M, // this matches Indesign's native QRCode correction level
+            typeNumber: undefined,
             joinSquares: false,
         };
 
-        // Overwrites options with supplied parameters
-        if (options)
-            for (var i in options)
-                this.options[i] = options[i];
+        // overwrites options with supplied parameters
+        for (var key in options)
+            if (options.hasOwnProperty(key))
+                this.options[key] = options[key];
 
         this.options.height = this.options.width;
         this.qrcode = null;
 
         if (this.options.text) {
             this.makeCode(this.options.text);
-            return this.draw(this.qrcode);
+            return this.draw(this.qrcode, this.options);
         }
 
     };
-
 
     /**
      * Make the QRCode
      * @param {String} sText link data
      */
     QRCode.prototype.makeCode = function (sText) {
-        this.qrcode = new QRCodeModel(_getTypeNumber(sText, this.options.correctLevel), this.options.correctLevel);
+        this.qrcode = new QRCodeModel(this.options.typeNumber || _getTypeNumber(sText, this.options.correctLevel), this.options.correctLevel);
         this.qrcode.addData(sText);
         this.qrcode.make();
     };
-
 
     /**
      * @name QRCode.CorrectLevel
      */
     QRCode.CorrectLevel = QRErrorCorrectLevel;
 
-
     /**
-     * Draws the qrcode to the document.
+     * Draws the qrcode to the Illustrator document.
      * @param {QRCode} qrcode - the qr code.
      * @returns {GroupItem}
      */
-    QRCode.prototype.draw = function (qrcode) {
+    QRCode.drawForIllustrator = function drawForIllustrator(qrcode, options) {
 
         var options = this.options,
             nCount = qrcode.getModuleCount(),
-            group = options.doc.groupItems.add(),
+            padding = options.margin || 0,
+            moduleSize = options.width / (nCount + padding * 2),
+            position = options.position || [0, 0],
+            margin = (options.margin || 0) * moduleSize,
+            container = options.container || doc,
+            group = container.groupItems.add(),
             item = group.compoundPathItems.add();
 
-        for (var row = 0; row < nCount; row++)
-            for (var col = 0; col < nCount; col++)
+        for (var row = 0; row < nCount; row++) {
+            for (var col = 0; col < nCount; col++) {
                 if (qrcode.isDark(row, col))
-                    drawSquare(item, [col, -row, 1, 1], options.colorDark);
-
-        // size and position
-        group.width = options.width;
-        group.height = options.height;
-        group.position = [options.left, -options.top];
+                    drawSquareForIllustrator(
+                        item,
+                        [margin + position[0] + col * moduleSize, position[1] - margin - row * moduleSize],
+                        moduleSize,
+                        {
+                            fillColor: options.colorDark,
+                        },
+                    );
+            }
+        }
 
         if (options.joinSquares) {
             var s = options.doc.selection;
@@ -848,12 +870,118 @@ var QRCode;
             options.doc.selection = s;
         }
 
-        var border = drawSquare(group, [0, 0, options.width, options.height], options.colorLight);
+        var border = drawSquareForIllustrator(
+            group,
+            position,
+            options.width,
+            {
+                name: 'border',
+                fillColor: options.colorLight,
+            }
+        );
+
         border.move(group, ElementPlacement.PLACEATEND);
 
         return group;
 
     };
+
+    /**
+     * Draws the given QRCode to the InDesign document.
+     * @author m1b
+     * @version 2024-12-15
+     * @param {QRCode} qrcode - the QR Code object.
+     * @param {Object} options
+     * @param {Document} options.doc - an InDesign Document.
+     * @param {Document|Group|Layer} [options.container] - where to draw the QRCode (default: doc).
+     * @param {Number} [options.margin] - the empty space on each side, measured in "QRCode pixels" (default: 0).
+     * @param {Number} options.width - width of the QRCode in points, including the margin.
+     * @param {Array<Number>} [options.position] - the top-left corner [x, y] (default: [0, 0]).
+     * @param {Color} [options.colorDark] - the dark color of the QR Code (default: black).
+     * @param {Color} [options.colorLight] - the light color of the QR Code (default: white).
+     * @param {Boolean} [options.joinSquares] - whether to PathFinder unite the squares into a compound path (default: false).
+     * @returns {Group} - the group containing the QR Code elements.
+     */
+    QRCode.drawForInDesign = function drawForInDesign(qrcode, options) {
+
+        var nCount = qrcode.getModuleCount(),
+            padding = options.margin || 0,
+            moduleSize = options.width / (nCount + padding * 2),
+            doc = options.doc,
+            position = options.position || [0, 0],
+            margin = (options.margin || 0) * moduleSize,
+            container = options.container || doc,
+            squares = [];
+
+        // add a light background rectangle (optional)
+        var background = drawSquareForIndesign(
+            container,
+            position,
+            options.width,
+            {
+                name: 'border',
+                fillColor: options.colorLight,
+                strokeColor: getNoColorForIndesign(doc),
+            },
+        );
+
+        // Draw each dark module as a rectangle
+        for (var row = 0; row < nCount; row++) {
+            for (var col = 0; col < nCount; col++) {
+                if (qrcode.isDark(row, col)) {
+                    squares.push(drawSquareForIndesign(
+                        container,
+                        [margin + position[0] + col * moduleSize, margin + position[1] + row * moduleSize],
+                        moduleSize,
+                        {
+                            fillColor: options.colorDark,
+                            strokeColor: getNoColorForIndesign(doc),
+                        },
+                    ));
+                }
+            }
+        }
+
+        if (options.joinSquares)
+            var squares = squares[0].addPath(squares);
+
+        var group = container.groups.add([squares, background]);
+        group.name = 'QRCode "' + options.text.slice(0, 30) + '"';
+
+        return group;
+
+    };
+
+    /**
+     * Draws a rectangle in the InDesign document.
+     * @author m1b
+     * @version 2024-12-15
+     * @param {Document} doc - The InDesign document.
+     * @param {Array} position - [x, y] position of the top-left corner.
+     * @param {number} size - Width and height of the rectangle.
+     * @param {Object} properties - properties to apply to the square.
+     * @returns {Rectangle} - The created rectangle.
+     */
+    function drawSquareForIndesign(container, position, size, properties) {
+
+        if (!container.hasOwnProperty('rectangles'))
+            throw new Error('drawSquareForIndesign: bad `container` supplied.');
+
+        properties = properties || {};
+
+        var x = position[0],
+            y = position[1],
+            square = container.rectangles.add({
+                geometricBounds: [y, x, y + size, x + size], // [top, left, bottom, right]
+            });
+
+        // apply properties
+        for (var key in properties)
+            if (properties.hasOwnProperty(key))
+                square[key] = properties[key];
+
+        return square;
+    }
 
     /**
      * Draws a rectangle.
@@ -862,28 +990,130 @@ var QRCode;
      * @param {RGBColor|CMYKColor|GrayColor} color - the color
      * @return {PathItem}
      */
-    function drawSquare(container, rect, color) {
-        var rect = container.pathItems.rectangle(rect[1], rect[0], rect[2], rect[3]); // TLWH
-        rect.filled = true;
-        rect.stroked = false;
-        rect.fillColor = color;
-        return rect;
-    };
+    function drawSquareForIllustrator(container, position, size, properties) {
 
-    /**
-     * Return an RGB color.
-     * @param {Array<Number>} breakdown - the color breakdown.
-     * @returns {RGBColor}
-     */
-    function makeColor(breakdown) {
+        var x = position[0],
+            y = position[1],
+            square = container.pathItems.rectangle(y, x, size, size); // [top, left, width, height]
 
-        var colr = new RGBColor();
-        colr.red = breakdown[0];
-        colr.green = breakdown[1];
-        colr.blue = breakdown[2];
+        square.filled = true;
+        square.stroked = false;
 
-        return colr;
+        // apply properties
+        for (var key in properties)
+            if (properties.hasOwnProperty(key))
+                square[key] = properties[key];
+
+        return square;
 
     };
+
+    QRCode.prototype.draw = APP_IS_INDESIGN ? QRCode.drawForInDesign : QRCode.drawForIllustrator;
 
 })();
+
+/**
+ * Makes a color from a array of color values.
+ * @param {Array<Number>} breakdown - the color values.
+ * @returns {GrayColor|RGBColor|CMYKColor}
+ */
+function makeColor(breakdown, doc) {
+
+    return APP_IS_INDESIGN
+        ? makeColorForIndesign(breakdown, doc)
+        : makeColorForIllustrator(breakdown);
+
+};
+
+/**
+ * Makes a color from a array of color values.
+ * @author m1b
+ * @version 2022-10-03
+ * @param {Array<Number>} breakdown - the color values.
+ * @returns {GrayColor|RGBColor|CMYKColor}
+ */
+function makeColorForIllustrator(breakdown) {
+
+    var c;
+
+    if (breakdown.length == 1) {
+
+        c = new GrayColor();
+        c.gray = Math.min(breakdown[0], 100);
+
+    }
+
+    else if (breakdown.length == 3) {
+
+        c = new RGBColor();
+        c.red = Math.min(breakdown[0], 255);
+        c.green = Math.min(breakdown[1], 255);
+        c.blue = Math.min(breakdown[2], 255);
+
+    }
+
+    else if (breakdown.length == 4) {
+
+        c = new CMYKColor();
+        c.cyan = Math.min(breakdown[0], 100);
+        c.magenta = Math.min(breakdown[1], 100);
+        c.yellow = Math.min(breakdown[2], 100);
+        c.black = Math.min(breakdown[3], 100);
+
+    }
+
+    return c;
+
+};
+
+/**
+ * Returns a new, unnamed Indesign Color.
+ * @author m1b - with thanks to https://community.adobe.com/t5/indesign-discussions/coloring-a-font-with-a-rgb-etc-without-adding-the-color-to-the-document-swatches/m-p/3655060
+ * @version 2023-06-26
+ * @param {Array<Number>} breakdown - the color values.
+ * @param {Document} doc - an Indesign Document.
+ * @returns {Color?}
+ */
+function makeColorForIndesign(breakdown, doc) {
+
+    var color,
+        colorSpace;
+
+    if (breakdown.length === 4)
+        colorSpace = ColorSpace.CMYK;
+    else if (breakdown.length == 3)
+        colorSpace = ColorSpace.RGB;
+    else
+        return;
+
+    if (!doc.colors[-1].isValid)
+        return;
+
+    // this will make an unnamed color, ie. it won't show up in document
+    color = doc.colors[-1].duplicate();
+    color.properties = {
+        space: colorSpace,
+        colorValue: breakdown,
+    };
+
+    return color;
+
+};
+
+/**
+ * Returns the "None" color.
+ * @author m1b
+ * @version 2024-12-15
+ * @param {Document} doc - an Indesign Document.
+ * @returns {Color?}
+ */
+function getNoColorForIndesign(doc) {
+
+    if (!doc.hasOwnProperty('swatches'))
+        return;
+
+    for (var i = 0; i < doc.swatches.length; i++)
+        if ('undefined' === typeof doc.swatches[i].space)
+            return doc.swatches[i];
+
+};
